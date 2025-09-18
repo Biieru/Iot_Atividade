@@ -107,5 +107,6 @@ Acesse: http://localhost:8000/dashboard.html
 
 ---
 
-**Desenvolvido para:** TADS034 - IoT Atividade  
+**Desenvolvido para:** TADS034 - Gabriel Coelho  
+
 **Tecnologias:** Python, HTML, JavaScript, Chart.js, ThingSpeak API
