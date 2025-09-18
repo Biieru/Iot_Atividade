@@ -2,8 +2,8 @@ import requests
 import json
 
 # Configurações do canal ThingSpeak
-CHANNEL_ID = "SEU_CHANNEL_ID_AQUI"  # Substitua pelo ID do seu canal
-READ_API_KEY = "SUA_READ_API_KEY_AQUI"  # Substitua pela sua chave de leitura
+CHANNEL_ID = "2943258"  # ID do canal fornecido
+READ_API_KEY = "G3BDQS6I5PRGFEWR"  # Chave de leitura fornecida
 RESULTS = 5  # Quantos registros obter
 
 # URL da API do ThingSpeak

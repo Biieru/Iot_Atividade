@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard IoT - ThingSpeak</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        :root {
+            color-scheme: light dark;
+        }
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+            line-height: 1.4;
+        }
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+        h1 {
+            font-size: 20px;
+            margin: 0;
+        }
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+        .card {
+            border: 1px solid color-mix(in oklab, CanvasText 18%, transparent);
+            border-radius: 10px;
+            padding: 12px;
+            background: color-mix(in oklab, Canvas 96%, transparent);
+        }
+        .meta {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+        .row {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+        canvas {
+            width: 100% !important;
+            height: 340px !important;
+        }
+        .error {
+            color: #b00020;
+            font-size: 13px;
+        }
+        .controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        button, select {
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid color-mix(in oklab, CanvasText 20%, transparent);
+            background: color-mix(in oklab, Canvas 96%, transparent);
+            color: inherit;
+        }
+    </style>
+    <meta name="color-scheme" content="light dark">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Dashboard IoT • ThingSpeak</h1>
+            <div class="controls">
+                <label>
+                    Canal:
+                    <input id="channelInput" type="text" inputmode="numeric" placeholder="Channel ID" style="width:110px">
+                </label>
+                <label>
+                    API Key:
+                    <input id="apiKeyInput" type="password" placeholder="Read API Key" style="width:180px">
+                </label>
+                <button id="toggleKeyBtn" type="button" aria-pressed="false" title="Ocultar/Revelar API KEY">Ocultar/Revelar API KEY</button>
+                <button id="saveBtn">CONFIRMAR</button>
+                <label>
+                    Janela:
+                    <select id="resultsSelect">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select>
+                </label>
+                <button id="refreshBtn">Atualizar</button>
+                <span id="status" class="meta"></span>
+            </div>
+        </header>
+
+        <div class="cards">
+            <div class="card">
+                <div class="meta" id="channelMeta">Carregando canal…</div>
+                <div class="meta" id="updatedMeta"></div>
+                <div id="error" class="error"></div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="card">
+                <h3 style="margin:0 0 8px">Temperatura (°C)</h3>
+                <canvas id="tempChart"></canvas>
+            </div>
+            <div class="card">
+                <h3 style="margin:0 0 8px">Umidade (%)</h3>
+                <canvas id="humChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let CHANNEL_ID = "";
+        let READ_API_KEY = "";
+        const DEFAULT_RESULTS = 50;
+        const REFRESH_MS = 30000; // 30s
+
+        const statusEl = document.getElementById('status');
+        const errorEl = document.getElementById('error');
+        const channelMetaEl = document.getElementById('channelMeta');
+        const updatedMetaEl = document.getElementById('updatedMeta');
+        const resultsSelect = document.getElementById('resultsSelect');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const saveBtn = document.getElementById('saveBtn');
+        const channelInput = document.getElementById('channelInput');
+        const apiKeyInput = document.getElementById('apiKeyInput');
+        const toggleKeyBtn = document.getElementById('toggleKeyBtn');
+
+        let tempChart, humChart;
+
+        function loadConfig() {
+            const params = new URLSearchParams(location.search);
+            const urlChannel = params.get('channel');
+            const urlKey = params.get('key');
+            const ls = JSON.parse(localStorage.getItem('thingspeak_config') || '{}');
+
+            CHANNEL_ID = urlChannel || ls.channel || "";
+            READ_API_KEY = urlKey || ls.key || "";
+
+            channelInput.value = CHANNEL_ID;
+            apiKeyInput.value = READ_API_KEY;
+        }
+
+        function saveConfig() {
+            const newChannel = (channelInput.value || '').trim();
+            const newKey = (apiKeyInput.value || '').trim();
+            if (!newChannel || !newKey) {
+                errorEl.textContent = 'Informe o Channel ID e a Read API Key do seu canal ThingSpeak.';
+                return false;
+            }
+            CHANNEL_ID = newChannel;
+            READ_API_KEY = newKey;
+            localStorage.setItem('thingspeak_config', JSON.stringify({ channel: CHANNEL_ID, key: READ_API_KEY }));
+            errorEl.textContent = '';
+            return true;
+        }
+
+        function toLocalHHMM(dateStr) {
+            const d = new Date(dateStr);
+            // Verificar se a data é válida
+            if (isNaN(d.getTime())) {
+                console.warn('Data inválida:', dateStr);
+                return dateStr; // Retornar string original se inválida
+            }
+            return d.toLocaleString(undefined, { hour12: false });
+        }
+
+        async function fetchThingSpeak(results) {
+            // Usar proxy local se disponível, senão tentar API direta
+            const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const baseUrl = isLocalhost ? '/api/thingspeak' : 'https://api.thingspeak.com';
+            const url = `${baseUrl}/channels/${CHANNEL_ID}/feeds.json?api_key=${READ_API_KEY}&results=${results}`;
+            
+            statusEl.textContent = 'Buscando…';
+            errorEl.textContent = '';
+            try {
+                const resp = await fetch(url, { 
+                    cache: 'no-store',
+                    mode: 'cors',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+                const data = await resp.json();
+                console.log('Dados recebidos:', data); // Debug
+                return data;
+            } catch (err) {
+                console.error('Erro na requisição:', err); // Debug
+                if (err.message.includes('CORS') || err.message.includes('blocked') || err.message.includes('Failed to fetch')) {
+                    errorEl.textContent = `Erro CORS: Use o servidor local. Execute: python server.py e acesse http://localhost:8000/dashboard.html`;
+                } else {
+                    errorEl.textContent = `Erro ao buscar dados: ${err.message}`;
+                }
+                throw err;
+            } finally {
+                statusEl.textContent = '';
+            }
+        }
+
+        function parseNumber(value) {
+            if (value === undefined || value === null) return null;
+            if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+            const s = String(value).trim().replace(',', '.');
+            const n = parseFloat(s);
+            return Number.isFinite(n) ? n : null;
+        }
+
+        function buildDatasets(data) {
+            console.log('buildDatasets - data:', data);
+            const feeds = (data.feeds || []).filter(f => f);
+            console.log('buildDatasets - feeds count:', feeds.length);
+            console.log('buildDatasets - first feed:', feeds[0]);
+            console.log('buildDatasets - last feed:', feeds[feeds.length - 1]);
+            
+            const labels = feeds.map(f => toLocalHHMM(f.created_at));
+            const tempValues = feeds.map(f => parseNumber(f.field2)); // field2 = temperatura
+            const humValues  = feeds.map(f => parseNumber(f.field1)); // field1 = umidade
+            
+            console.log('buildDatasets - labels:', labels);
+            console.log('buildDatasets - tempValues (first 5):', tempValues.slice(0, 5));
+            console.log('buildDatasets - humValues (first 5):', humValues.slice(0, 5));
+            console.log('buildDatasets - tempValues valid count:', tempValues.filter(v => v !== null).length);
+            console.log('buildDatasets - humValues valid count:', humValues.filter(v => v !== null).length);
+
+            const f1 = data.channel?.field1 ? `field1: ${data.channel.field1}` : 'field1';
+            const f2 = data.channel?.field2 ? `field2: ${data.channel.field2}` : 'field2';
+            channelMetaEl.textContent = `${data.channel?.name || 'Canal'} • ID ${CHANNEL_ID} • ${f1} • ${f2}`;
+            const last = feeds[feeds.length - 1];
+            updatedMetaEl.textContent = last ? `Última atualização: ${toLocalHHMM(last.created_at)}` : '';
+
+            return { labels, tempValues, humValues };
+        }
+
+        function ensureCharts(labels, tempValues, humValues) {
+            console.log('ensureCharts - labels:', labels.length);
+            console.log('ensureCharts - tempValues:', tempValues.slice(0, 3));
+            console.log('ensureCharts - humValues:', humValues.slice(0, 3));
+            
+            const tempCtx = document.getElementById('tempChart');
+            const humCtx = document.getElementById('humChart');
+
+            // Destruir gráficos existentes se houver
+            if (tempChart) {
+                tempChart.destroy();
+                tempChart = null;
+            }
+            if (humChart) {
+                humChart.destroy();
+                humChart = null;
+            }
+
+            // Criar gráfico de temperatura
+            tempChart = new Chart(tempCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Temperatura (°C)',
+                        data: tempValues,
+                        borderColor: 'rgb(234, 88, 12)',
+                        backgroundColor: 'rgba(234, 88, 12, 0.1)',
+                        pointRadius: 2,
+                        pointHoverRadius: 4,
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Tempo'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Temperatura (°C)'
+                            },
+                            beginAtZero: false
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    }
+                }
+            });
+
+            // Criar gráfico de umidade
+            humChart = new Chart(humCtx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Umidade (%)',
+                        data: humValues,
+                        borderColor: 'rgb(14, 165, 233)',
+                        backgroundColor: 'rgba(14, 165, 233, 0.1)',
+                        pointRadius: 2,
+                        pointHoverRadius: 4,
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Tempo'
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Umidade (%)'
+                            },
+                            beginAtZero: false
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    }
+                }
+            });
+
+            console.log('Gráficos criados com sucesso!');
+        }
+
+        async function refresh() {
+            const results = Number(resultsSelect.value || DEFAULT_RESULTS);
+            try {
+                console.log('Iniciando refresh...');
+                const data = await fetchThingSpeak(results);
+                console.log('Dados recebidos, processando...');
+                
+                const { labels, tempValues, humValues } = buildDatasets(data);
+                
+                if (!data.feeds || data.feeds.length === 0) {
+                    errorEl.textContent = 'Nenhum feed retornado pela API. Verifique o canal/permite leitura e se há dados.';
+                    return;
+                }
+                
+                console.log('Criando gráficos...');
+                ensureCharts(labels, tempValues, humValues);
+                
+                const countValid = (arr) => arr.filter(v => v !== null && Number.isFinite(v)).length;
+                const tempValid = countValid(tempValues);
+                const humValid = countValid(humValues);
+                
+                statusEl.textContent = `Registros: ${data.feeds?.length || 0} • Pontos: ${labels.length} • Temp: ${tempValid} • Umid: ${humValid}`;
+                
+                if (labels.length > 0 && tempValid === 0 && humValid === 0) {
+                    errorEl.textContent = 'Nenhum valor numérico encontrado nos fields. Verifique se os dados estão em field1/field2.';
+                } else {
+                    errorEl.textContent = '';
+                }
+                
+                console.log('Refresh concluído!');
+            } catch (err) {
+                console.error('Erro no refresh:', err);
+                errorEl.textContent = `Erro: ${err.message}`;
+            }
+        }
+
+        refreshBtn.addEventListener('click', refresh);
+        saveBtn.addEventListener('click', () => { if (saveConfig()) refresh(); });
+        toggleKeyBtn.addEventListener('click', () => {
+            const isHidden = apiKeyInput.type === 'password';
+            apiKeyInput.type = isHidden ? 'text' : 'password';
+            toggleKeyBtn.textContent = isHidden ? 'Ocultar API KEY' : 'Revelar API KEY';
+            toggleKeyBtn.setAttribute('aria-pressed', String(isHidden));
+        });
+        resultsSelect.addEventListener('change', refresh);
+        loadConfig();
+        refresh();
+        setInterval(refresh, REFRESH_MS);
+    </script>
+</body>
+</html>
+
+
